@@ -14,13 +14,13 @@ Hasskey reads a configuration file on startup.
 The default config file path is `config.yaml` and can be changed using a command line option.
 The config file uses the YAML file format and consists of the following sections:
 
-### `home-assistant:`
-This section defines which Home Assistant instance to talk to.
+### Home Assistant
+The `home-assistant` section defines which Home Assistant instance to talk to.
 The `url` field defines the base URL of your Home Assistant instance.
 The `token` field must contain a valid [long-lived access token](https://www.home-assistant.io/docs/authentication/#your-account-profile).
 
-### `devices:`
-This section contains a list of input devices to monitor for events.
+### Devices
+The `devices` section contains a list of input devices to monitor for events.
 Each entry consists of the `name` field containing a unique name for the device to monitor.
 This name is used to identify the device in the created Home Assistant events.
 
