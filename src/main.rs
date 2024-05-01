@@ -41,7 +41,8 @@ async fn main() -> Result<()> {
         .init();
 
     let config = cli.config.unwrap_or("./config.yaml".into());
-    let config = config::Config::load(&config).await
+    let config = config::Config::load(&config)
+        .await
         .with_context(|| format!("Failed to load config: {}", config.display()))?;
 
     let mut threads = Vec::new();
@@ -62,11 +63,15 @@ async fn main() -> Result<()> {
 
                 debug!("Got event: {:?}", event);
 
-                let url = home_assistant.url
-                    .join("api/events/").expect("Valid URL")
-                    .join(EVENT_TYPE).expect("Valid URL");
+                let url = home_assistant
+                    .url
+                    .join("api/events/")
+                    .expect("Valid URL")
+                    .join(EVENT_TYPE)
+                    .expect("Valid URL");
 
-                let result = client.post(url.clone())
+                let result = client
+                    .post(url.clone())
                     .bearer_auth(&home_assistant.token)
                     .json(&event)
                     .send()
@@ -89,10 +94,15 @@ async fn main() -> Result<()> {
     return Ok(());
 }
 
-fn handle_device(config: config::Device) -> Result<impl Stream<Item=Result<EventData>>> {
+fn handle_device(config: config::Device) -> Result<impl Stream<Item = Result<EventData>>> {
     let device = match &config.filter {
-        config::DeviceFilter::Path(path) => evdev::Device::open(&path)
-            .with_context(|| format!("Failed to open input device: {}: {}", config.name, path.display()))?,
+        config::DeviceFilter::Path(path) => evdev::Device::open(&path).with_context(|| {
+            format!(
+                "Failed to open input device: {}: {}",
+                config.name,
+                path.display()
+            )
+        })?,
 
         config::DeviceFilter::Input(name) => evdev::enumerate()
             .map(|(_, device)| device)
@@ -122,12 +132,18 @@ fn handle_device(config: config::Device) -> Result<impl Stream<Item=Result<Event
                 }
                 return true;
             })
-            .with_context(|| format!("No device found: {} (bus={:?}, vendor={:?}, product={:?}, version={:?})", config.name, bus_type, vendor, product, version))?,
+            .with_context(|| {
+                format!(
+                    "No device found: {} (bus={:?}, vendor={:?}, product={:?}, version={:?})",
+                    config.name, bus_type, vendor, product, version
+                )
+            })?,
     };
 
     info!("Found device: {}: {:?}", config.name, device.input_id());
 
-    let events = device.into_event_stream()
+    let events = device
+        .into_event_stream()
         .with_context(|| format!("Failed to open event stream for device: {}", config.name))?;
 
     let events = events
