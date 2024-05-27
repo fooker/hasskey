@@ -1,21 +1,19 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use futures::{future, TryStreamExt};
-use serde::Serialize;
-use tokio_stream::{Stream, StreamExt};
-use tracing::{debug, error, info, Level};
+use evdev::InputEventKind;
+use futures::stream::SelectAll;
+use futures::{Stream, StreamExt, TryStreamExt};
+use tokio_udev as udev;
+use tracing::{debug, error, info, trace, Level};
+
+use crate::config::DeviceConfig;
+use crate::hass::{EventData, EventValue, HomeAssistantClient};
 
 pub mod config;
-
-const EVENT_TYPE: &'static str = "hasskey";
-
-#[derive(Serialize, Debug)]
-pub struct EventData {
-    device: String,
-    key: evdev::Key,
-}
+pub mod hass;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -45,125 +43,146 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("Failed to load config: {}", config.display()))?;
 
-    let mut threads = Vec::new();
+    let hass = HomeAssistantClient::new(config.home_assistant)
+        .await
+        .context("Failed to initialize home-assistant client")?;
 
-    let client = reqwest::Client::new();
+    info!("🥳 Go Go Go");
 
-    for device in config.devices {
-        debug!("Processing device: {}", device.name);
+    let mut devices = SelectAll::new();
 
-        let client = client.clone();
+    let mut enumerator = udev::Enumerator::new().context("Failed to create enumerator")?;
+    enumerator
+        .match_subsystem("input")
+        .context("Failed to match input subsystem")?;
 
-        let home_assistant = &config.home_assistant;
+    for device in enumerator
+        .scan_devices()
+        .context("Failed to enumerate devices")?
+    {
+        if let Some(devnode) = device.devnode() {
+            if let Some(name) = match_device(&device, &config.devices) {
+                debug!(
+                    "Matched device {name}: {devnode}",
+                    devnode = devnode.display()
+                );
 
-        threads.push(async move {
-            let mut events = handle_device(device)?;
-            while let Some(event) = events.next().await {
-                let event = event?;
-
-                debug!("Got event: {:?}", event);
-
-                let url = home_assistant
-                    .url
-                    .join("api/events/")
-                    .expect("Valid URL")
-                    .join(EVENT_TYPE)
-                    .expect("Valid URL");
-
-                let result = client
-                    .post(url.clone())
-                    .bearer_auth(&home_assistant.token)
-                    .json(&event)
-                    .send()
-                    .await
-                    .and_then(|response| response.error_for_status());
-
-                if let Err(err) = result {
-                    error!("Failed to send event: {}", err);
-                }
-
-                debug!("Event delivered");
+                let device = handle_device(name, devnode)?;
+                devices.push(device);
             }
-
-            return anyhow::Ok(());
-        });
+        }
     }
 
-    future::try_join_all(threads).await?;
+    let monitor = udev::MonitorBuilder::new()?
+        .match_subsystem("input")?
+        .listen()?;
+    let mut monitor = udev::AsyncMonitorSocket::new(monitor)?;
 
-    return Ok(());
+    loop {
+        tokio::select! {
+             Some(Ok(event)) = monitor.next() => {
+                 debug!("Received udev event: {:?}", event);
+                 match event.event_type() {
+                     udev::EventType::Add => {
+                         let device = event.device();
+                         if let Some(devnode) = device.devnode() {
+                             if let Some(name) = match_device(&device, &config.devices) {
+                                 debug!("Matched device {name}: {devnode}", devnode=devnode.display());
+
+                                 let device = handle_device(name, devnode)?;
+                                 devices.push(device);
+                             }
+                         }
+                     }
+
+                     udev::EventType::Remove => {
+
+                     }
+
+                     _ => {}
+                 }
+             }
+
+             Some(event) = devices.next() => {
+                 hass.send_event(event).await;
+             }
+        }
+    }
 }
 
-fn handle_device(config: config::Device) -> Result<impl Stream<Item = Result<EventData>>> {
-    let device = match &config.filter {
-        config::DeviceFilter::Path(path) => evdev::Device::open(&path).with_context(|| {
-            format!(
-                "Failed to open input device: {}: {}",
-                config.name,
-                path.display()
-            )
-        })?,
+fn match_device(device: &udev::Device, config: &[DeviceConfig]) -> Option<String> {
+    fn match_key(device: &udev::Device, key: &str, filter: Option<&regex::bytes::Regex>) -> bool {
+        if let Some(value) = device.property_value(key) {
+            return filter.map_or(false, |filter| filter.is_match(value.as_encoded_bytes()));
+        }
 
-        config::DeviceFilter::Input(name) => evdev::enumerate()
-            .map(|(_, device)| device)
-            .find(|device| device.name().map_or(false, |device| device == name))
-            .with_context(|| format!("No device found with name: {}: {}", config.name, name))?,
+        if let Some(parent) = device.parent() {
+            return match_key(&parent, key, filter);
+        }
 
-        config::DeviceFilter::Device {
-            bus_type,
-            vendor,
-            product,
-            version,
-        } => evdev::enumerate()
-            .map(|(_, device)| device)
-            .find(|device| {
-                let id = device.input_id();
-                if !bus_type.map_or(true, |bus_type| id.bus_type() == bus_type) {
-                    return false;
-                }
-                if !vendor.map_or(true, |vendor| id.vendor() == vendor) {
-                    return false;
-                }
-                if !product.map_or(true, |product| id.product() == product) {
-                    return false;
-                }
-                if !version.map_or(true, |version| id.version() == version) {
-                    return false;
-                }
-                return true;
-            })
-            .with_context(|| {
-                format!(
-                    "No device found: {} (bus={:?}, vendor={:?}, product={:?}, version={:?})",
-                    config.name, bus_type, vendor, product, version
-                )
-            })?,
-    };
+        return false;
+    }
 
-    info!("Found device: {}: {:?}", config.name, device.input_id());
+    return config
+        .iter()
+        .find(|config| {
+            config
+                .filter
+                .iter()
+                .all(|(key, filter)| match_key(&device, key, filter.as_ref()))
+        })
+        .map(|config| config.name.clone());
+}
 
-    let events = device
+fn handle_device(
+    name: String,
+    devnode: impl AsRef<Path>,
+) -> Result<Pin<Box<dyn Stream<Item = EventData> + Send>>> {
+    let devnode = devnode.as_ref();
+
+    let device = evdev::Device::open(&devnode).with_context(|| {
+        format!(
+            "Failed to open input device {}: {}",
+            name,
+            devnode.display()
+        )
+    })?;
+
+    let device = device
         .into_event_stream()
-        .with_context(|| format!("Failed to open event stream for device: {}", config.name))?;
+        .with_context(|| {
+            format!(
+                "Failed to stream input device {}: {}",
+                name,
+                devnode.display()
+            )
+        })?
+        .err_into::<anyhow::Error>()
+        .inspect(|event| trace!("Got evdev event: {event:?}"));
 
-    let events = events
-        .map_err(anyhow::Error::from)
-        .try_filter_map(move |event| {
-            debug!("Got event: {:?}", event);
+    let device = device.map_ok(move |event| match event.kind() {
+        InputEventKind::Key(key) => Some(EventData {
+            device: name.clone(),
+            key,
+            value: match event.value() {
+                0 => EventValue::UP,
+                1 => EventValue::DOWN,
+                _ => unreachable!("Unsupported evdev event value"),
+            },
+        }),
 
-            let event = match event.kind() {
-                evdev::InputEventKind::Key(key) => EventData {
-                    device: config.name.clone(),
-                    key,
-                },
+        _ => None,
+    });
 
-                _ => {
-                    return future::ready(Ok(None));
-                }
-            };
+    let device = device.filter_map(|event| async {
+        match event {
+            Ok(event) => event, // Flatten the Option<_> using the filter part
+            Err(err) => {
+                error!("Error reading event: {}", err);
+                return None;
+            }
+        }
+    });
 
-            return future::ready(Ok(Some(event)));
-        });
-
-    return Ok(events);
+    return Ok(Box::pin(device));
 }

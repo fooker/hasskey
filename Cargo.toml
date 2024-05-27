@@ -6,9 +6,12 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 
+lazy_static = "1.4"
+
 tokio = { version = "1.36", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["full"] }
+tokio-udev = { version = "0.9", features = ["hwdb"] }
 futures = "0.3"
 
 tracing = "0.1"
@@ -18,11 +21,13 @@ clap = { version = "4.5", features = ["derive"] }
 
 serde = { version = "1", features = ["derive", "rc"] }
 serde_yaml = "0.9"
+serde_with = "3.8"
+
+regex = { version = "1.10" }
 
 evdev = { version = "0.12", features = ["tokio", "serde"] }
 
 reqwest = { version = "0.12", features = ["json"] }
-
 url = { version = "2.5", features = ["serde"] }
 
 

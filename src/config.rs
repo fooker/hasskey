@@ -1,42 +1,31 @@
+use std::collections::HashMap;
+use std::path::Path;
+
 use anyhow::{Context, Result};
-use evdev::BusType;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use serde_with::{serde_as, DisplayFromStr};
 use url::Url;
 
 #[derive(Deserialize)]
-pub struct HomeAssistant {
+pub struct HomeAssistantConfig {
     pub url: Url,
     pub token: String,
 }
 
+#[serde_as]
 #[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeviceFilter {
-    Path(PathBuf),
-    Input(String),
-    Device {
-        bus_type: Option<BusType>,
-        vendor: Option<u16>,
-        product: Option<u16>,
-        version: Option<u16>,
-    },
-}
-
-#[derive(Deserialize)]
-pub struct Device {
+pub struct DeviceConfig {
     pub name: String,
-
-    #[serde(flatten)]
-    pub filter: DeviceFilter,
+    #[serde_as(as = "HashMap<_, Option<DisplayFromStr>>")]
+    pub filter: HashMap<String, Option<regex::bytes::Regex>>,
 }
 
 #[derive(Deserialize)]
 pub struct Config {
     #[serde(alias = "home-assistant", alias = "hass")]
-    pub home_assistant: HomeAssistant,
+    pub home_assistant: HomeAssistantConfig,
 
-    pub devices: Vec<Device>,
+    pub devices: Vec<DeviceConfig>,
 }
 
 impl Config {

@@ -43,6 +43,7 @@
 
           buildInputs = with pkgs; [
             openssl
+            udev
           ];
         };
 
@@ -59,6 +60,7 @@
 
           buildInputs = with pkgs; [
             openssl
+            udev
           ];
         });
       in
