@@ -31,7 +31,7 @@ impl HomeAssistantClient {
         return Ok(Self {
             client,
             url,
-            token: config.token,
+            token: config.token.read().await?.to_string(),
         });
     }
 

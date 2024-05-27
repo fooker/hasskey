@@ -1,15 +1,38 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
 use url::Url;
 
+#[derive(Debug, Deserialize)]
+pub enum Secret {
+    #[serde(rename = "path")]
+    Reference(PathBuf),
+
+    #[serde(untagged)]
+    Literal(String),
+}
+
+impl Secret {
+    pub async fn read(&self) -> Result<Cow<str>> {
+        return match self {
+            Secret::Literal(secret) => Ok(Cow::Borrowed(secret)),
+            Secret::Reference(path) => Ok(Cow::Owned(
+                tokio::fs::read_to_string(&path)
+                    .await
+                    .with_context(|| format!("Failed to read secret: {}", path.display()))?,
+            )),
+        };
+    }
+}
+
 #[derive(Deserialize)]
 pub struct HomeAssistantConfig {
     pub url: Url,
-    pub token: String,
+    pub token: Secret,
 }
 
 #[serde_as]
