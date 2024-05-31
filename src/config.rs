@@ -35,12 +35,28 @@ pub struct HomeAssistantConfig {
     pub token: Secret,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GrabConfig {
+    Exclusive,
+    Shared,
+}
+
+impl Default for GrabConfig {
+    fn default() -> Self {
+        return Self::Exclusive;
+    }
+}
+
 #[serde_as]
 #[derive(Deserialize)]
 pub struct DeviceConfig {
     pub name: String,
     #[serde_as(as = "HashMap<_, Option<DisplayFromStr>>")]
     pub filter: HashMap<String, Option<regex::bytes::Regex>>,
+
+    #[serde(default)]
+    pub grab: GrabConfig,
 }
 
 #[derive(Deserialize)]

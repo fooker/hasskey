@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use tokio_udev as udev;
 use tracing::{debug, error, info, trace, Level};
 
-use crate::config::DeviceConfig;
+use crate::config::{DeviceConfig, GrabConfig};
 use crate::hass::{EventData, EventValue, HomeAssistantClient};
 
 pub mod config;
@@ -61,13 +61,14 @@ async fn main() -> Result<()> {
         .context("Failed to enumerate devices")?
     {
         if let Some(devnode) = device.devnode() {
-            if let Some(name) = match_device(&device, &config.devices) {
+            if let Some(device) = match_device(&device, &config.devices) {
                 debug!(
                     "Matched device {name}: {devnode}",
+                    name = device.name,
                     devnode = devnode.display()
                 );
 
-                let device = handle_device(name, devnode)?;
+                let device = handle_device(device, devnode)?;
                 devices.push(device);
             }
         }
@@ -86,10 +87,12 @@ async fn main() -> Result<()> {
                      udev::EventType::Add => {
                          let device = event.device();
                          if let Some(devnode) = device.devnode() {
-                             if let Some(name) = match_device(&device, &config.devices) {
-                                 debug!("Matched device {name}: {devnode}", devnode=devnode.display());
+                             if let Some(device) = match_device(&device, &config.devices) {
+                                 debug!("Matched device {name}: {devnode}",
+                                    name=device.name,
+                                    devnode=devnode.display());
 
-                                 let device = handle_device(name, devnode)?;
+                                 let device = handle_device(device, devnode)?;
                                  devices.push(device);
                              }
                          }
@@ -110,7 +113,7 @@ async fn main() -> Result<()> {
     }
 }
 
-fn match_device(device: &udev::Device, config: &[DeviceConfig]) -> Option<String> {
+fn match_device(device: &udev::Device, config: &[DeviceConfig]) -> Option<Device> {
     fn match_key(device: &udev::Device, key: &str, filter: Option<&regex::bytes::Regex>) -> bool {
         if let Some(value) = device.property_value(key) {
             return filter.map_or(false, |filter| filter.is_match(value.as_encoded_bytes()));
@@ -131,29 +134,45 @@ fn match_device(device: &udev::Device, config: &[DeviceConfig]) -> Option<String
                 .iter()
                 .all(|(key, filter)| match_key(&device, key, filter.as_ref()))
         })
-        .map(|config| config.name.clone());
+        .map(|config| Device {
+            name: config.name.clone(),
+            grab: match config.grab {
+                GrabConfig::Exclusive => true,
+                GrabConfig::Shared => false,
+            },
+        });
 }
 
 fn handle_device(
-    name: String,
+    config: Device,
     devnode: impl AsRef<Path>,
 ) -> Result<Pin<Box<dyn Stream<Item = EventData> + Send>>> {
     let devnode = devnode.as_ref();
 
-    let device = evdev::Device::open(&devnode).with_context(|| {
+    let mut device = evdev::Device::open(&devnode).with_context(|| {
         format!(
             "Failed to open input device {}: {}",
-            name,
+            config.name,
             devnode.display()
         )
     })?;
+
+    if config.grab {
+        device.grab().with_context(|| {
+            format!(
+                "Failed to grab device {}: {}",
+                config.name,
+                devnode.display()
+            )
+        })?;
+    }
 
     let device = device
         .into_event_stream()
         .with_context(|| {
             format!(
                 "Failed to stream input device {}: {}",
-                name,
+                config.name,
                 devnode.display()
             )
         })?
@@ -162,7 +181,7 @@ fn handle_device(
 
     let device = device.map_ok(move |event| match event.kind() {
         InputEventKind::Key(key) => Some(EventData {
-            device: name.clone(),
+            device: config.name.clone(),
             key,
             value: match event.value() {
                 0 => EventValue::UP,
@@ -185,4 +204,9 @@ fn handle_device(
     });
 
     return Ok(Box::pin(device));
+}
+
+struct Device {
+    name: String,
+    grab: bool,
 }
