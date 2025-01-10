@@ -7,7 +7,7 @@ use evdev::InputEventKind;
 use futures::stream::SelectAll;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tokio_udev as udev;
-use tracing::{debug, error, info, trace, Level};
+use tracing::{debug, error, warn, info, trace, Level};
 
 use crate::config::{DeviceConfig, GrabConfig};
 use crate::hass::{EventData, EventValue, HomeAssistantClient};
@@ -186,7 +186,10 @@ fn handle_device(
             value: match event.value() {
                 0 => EventValue::UP,
                 1 => EventValue::DOWN,
-                _ => unreachable!("Unsupported evdev event value"),
+                unsupported => {
+                    warn!("Unsupported evdev event value: {}", unsupported);
+                    return None;
+                }
             },
         }),
 
