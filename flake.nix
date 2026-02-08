@@ -2,7 +2,7 @@
   description = "Sound routing daemon";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs";
 
     crane = {
       url = "github:ipetkov/crane";

@@ -17,7 +17,7 @@ pub enum Secret {
 }
 
 impl Secret {
-    pub async fn read(&self) -> Result<Cow<str>> {
+    pub async fn read(&self) -> Result<Cow<'_, str>> {
         return match self {
             Secret::Literal(secret) => Ok(Cow::Borrowed(secret)),
             Secret::Reference(path) => Ok(Cow::Owned(
